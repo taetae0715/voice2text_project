@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 import os
 from datetime import datetime
@@ -6,10 +6,13 @@ import json
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, letter
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 import io
+import whisper
+import pymysql
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 CORS(app)
@@ -18,6 +21,23 @@ CORS(app)
 # Windows의 경우 'C:/Windows/Fonts/malgun.ttf'를 사용할 수 있습니다
 FONT_PATH = 'C:/Windows/Fonts/malgun.ttf'
 pdfmetrics.registerFont(TTFont('Malgun', FONT_PATH))
+
+# 업로드 폴더 설정
+UPLOAD_FOLDER = 'uploads'
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
+# DB 연결 설정
+def get_db_connection():
+    return pymysql.connect(
+        host='49.50.160.162',
+        user='dbcvt',
+        password='dbcvt1234',
+        database='dbcvt',
+        port=3306,
+        charset='utf8mb4',
+        autocommit=True
+    )
 
 def generate_pdf(record):
     # PDF 생성을 위한 버퍼 생성
@@ -116,35 +136,274 @@ def generate_excel(record):
     excel_file.seek(0)
     return excel_file
 
-@app.route('/api/records/<int:record_id>/download/<format>', methods=['GET'])
-def download_record(record_id, format):
+@app.route('/records/<int:record_id>/audio', methods=['GET'])
+def get_audio(record_id):
     try:
-        # 녹음 데이터 조회 (실제 구현에서는 데이터베이스에서 조회)
-        record = {
-            'id': record_id,
-            'title': '2024년 3월 15일 회의',  # 예시 데이터
-            'date': '2024-03-15 14:30',
-            'duration': '45:30',
-            'summary': '프로젝트 진행상황 논의 및 일정 조정. 주요 논의 사항: 1) 디자인 시스템 구축 2) API 연동 3) 테스트 계획'
-        }
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
-        if format == 'pdf':
-            file_buffer = generate_pdf(record)
-            mimetype = 'application/pdf'
-            extension = 'pdf'
-        elif format == 'excel':
-            file_buffer = generate_excel(record)
-            mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            extension = 'xlsx'
-        else:
-            return jsonify({'error': '지원하지 않는 파일 형식입니다.'}), 400
+        cursor.execute("""
+            SELECT audio_filename
+            FROM tb_voice_text
+            WHERE id = %s
+        """, (record_id,))
+        
+        record = cursor.fetchone()
+        if not record:
+            return jsonify({'error': 'Record not found'}), 404
+        
+        audio_filename = record[0]
+        audio_path = os.path.join(UPLOAD_FOLDER, audio_filename)
+        
+        if not os.path.exists(audio_path):
+            return jsonify({'error': 'Audio file not found'}), 404
         
         return send_file(
-            file_buffer,
-            mimetype=mimetype,
+            audio_path,
+            mimetype='audio/wav',
             as_attachment=True,
-            download_name=f"{record['title']}.{extension}"
+            download_name=audio_filename
         )
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route('/records/<int:record_id>/download/<format>', methods=['GET'])
+def download_record(record_id, format):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT audio_filename, summary_text, full_text, created_at
+            FROM tb_voice_text
+            WHERE id = %s
+        """, (record_id,))
+        
+        record = cursor.fetchone()
+        if not record:
+            return jsonify({'error': 'Record not found'}), 404
+        
+        audio_filename, summary_text, full_text, created_at = record
+        
+        if format == 'txt':
+            content = f"""[제목]
+{audio_filename}
+
+[날짜]
+{created_at.strftime('%Y-%m-%d %H:%M')}
+
+[음성파일]
+{audio_filename}
+
+[요약]
+{summary_text}
+
+[전체내용]
+{full_text}"""
+            
+            return Response(
+                content.encode('utf-8'),
+                mimetype='text/plain; charset=utf-8',
+                headers={
+                    'Content-Disposition': f'attachment; filename="{audio_filename}.txt"'
+                }
+            )
+        elif format == 'pdf':
+            from reportlab.pdfgen import canvas
+            from reportlab.lib.pagesizes import letter
+            from io import BytesIO
+            
+            buffer = BytesIO()
+            p = canvas.Canvas(buffer, pagesize=letter)
+            
+            # PDF 내용 작성
+            p.setFont('Helvetica-Bold', 14)
+            p.drawString(50, 750, "[제목]")
+            p.setFont('Helvetica', 12)
+            p.drawString(50, 730, audio_filename)
+            
+            p.setFont('Helvetica-Bold', 14)
+            p.drawString(50, 700, "[날짜]")
+            p.setFont('Helvetica', 12)
+            p.drawString(50, 680, created_at.strftime('%Y-%m-%d %H:%M'))
+            
+            p.setFont('Helvetica-Bold', 14)
+            p.drawString(50, 650, "[음성파일]")
+            p.setFont('Helvetica', 12)
+            p.drawString(50, 630, audio_filename)
+            
+            p.setFont('Helvetica-Bold', 14)
+            p.drawString(50, 600, "[요약]")
+            p.setFont('Helvetica', 12)
+            y = 580
+            for line in summary_text.split('\n'):
+                p.drawString(50, y, line)
+                y -= 20
+            
+            p.setFont('Helvetica-Bold', 14)
+            p.drawString(50, y-20, "[전체내용]")
+            p.setFont('Helvetica', 12)
+            y -= 40
+            for line in full_text.split('\n'):
+                p.drawString(50, y, line)
+                y -= 20
+                if y < 50:
+                    p.showPage()
+                    y = 750
+            
+            p.save()
+            buffer.seek(0)
+            
+            return Response(
+                buffer,
+                mimetype='application/pdf',
+                headers={
+                    'Content-Disposition': f'attachment; filename="{audio_filename}.pdf"'
+                }
+            )
+        elif format == 'excel':
+            from openpyxl import Workbook
+            from io import BytesIO
+            
+            wb = Workbook()
+            ws = wb.active
+            
+            # 엑셀 내용 작성
+            ws['A1'] = "[제목]"
+            ws['B1'] = audio_filename
+            ws['A2'] = "[날짜]"
+            ws['B2'] = created_at.strftime('%Y-%m-%d %H:%M')
+            ws['A3'] = "[음성파일]"
+            ws['B3'] = audio_filename
+            ws['A5'] = "[요약]"
+            ws['B5'] = summary_text
+            ws['A7'] = "[전체내용]"
+            ws['B7'] = full_text
+            
+            # 열 너비 조정
+            ws.column_dimensions['A'].width = 15
+            ws.column_dimensions['B'].width = 50
+            
+            # 셀 정렬
+            for row in ws.iter_rows(min_row=1, max_row=7, min_col=1, max_col=2):
+                for cell in row:
+                    cell.alignment = Alignment(wrap_text=True, vertical='center')
+            
+            buffer = BytesIO()
+            wb.save(buffer)
+            buffer.seek(0)
+            
+            return Response(
+                buffer,
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                headers={
+                    'Content-Disposition': f'attachment; filename="{audio_filename}.xlsx"'
+                }
+            )
+        else:
+            return jsonify({'error': 'Unsupported format'}), 400
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route('/convert', methods=['POST'])
+def convert_audio():
+    if 'audio' not in request.files:
+        return jsonify({'error': 'No audio file provided'}), 400
+    
+    audio_file = request.files['audio']
+    model_type = request.form.get('model', 'small')
+    
+    if audio_file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+    
+    # 파일 저장
+    filename = secure_filename(audio_file.filename)
+    file_path = os.path.join(UPLOAD_FOLDER, filename)
+    audio_file.save(file_path)
+    
+    try:
+        # Whisper 모델 로드
+        model = whisper.load_model(model_type)
+        
+        # 음성 텍스트 추출
+        result = model.transcribe(file_path, language="ko")
+        full_text = result["text"]
+        
+        # 텍스트 요약
+        summary_text = full_text[:50] + "..." if len(full_text) > 50 else full_text
+        
+        # DB에 저장
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO tb_voice_text (
+                created_at,
+                summary_text,
+                full_text,
+                audio_filename,
+                document_filename,
+                format
+            ) VALUES (NOW(), %s, %s, %s, %s, %s)
+        """, (
+            summary_text,
+            full_text,
+            filename,
+            f"{os.path.splitext(filename)[0]}.txt",
+            "txt"
+        ))
+        
+        cursor.close()
+        conn.close()
+        
+        # 임시 파일 삭제
+        os.remove(file_path)
+        
+        return jsonify({
+            'success': True,
+            'summary': summary_text,
+            'full_text': full_text
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/records', methods=['GET'])
+def get_records():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, created_at, summary_text, full_text, audio_filename, document_filename, format
+            FROM tb_voice_text
+            ORDER BY created_at DESC
+        """)
+        
+        records = []
+        for row in cursor.fetchall():
+            records.append({
+                'id': row[0],
+                'date': row[1].strftime('%Y-%m-%d %H:%M'),
+                'summary': row[2],
+                'full_text': row[3],
+                'audio_filename': row[4],
+                'document_filename': row[5],
+                'format': row[6]
+            })
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify(records)
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500

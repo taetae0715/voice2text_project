@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import '../styles/Auth.css';
+import axios from 'axios';
 
 function Login({ onToggleAuth, onLogin }) {
   const [email, setEmail] = useState('');
@@ -9,20 +10,62 @@ function Login({ onToggleAuth, onLogin }) {
   const [resetStatus, setResetStatus] = useState('');
   const [error, setError] = useState('');
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (email === 'admin' && password === '1234') {
-      onLogin();
-      setError('');
-    } else {
-      setError('아이디 또는 비밀번호가 올바르지 않습니다.');
+    try {
+      const response = await axios.post('http://localhost:5000/api/auth/login', {
+        email,
+        password
+      });
+
+      if (response.data && response.data.token) {
+        localStorage.setItem('token', response.data.token);
+        localStorage.setItem('user', JSON.stringify({
+          id: response.data.userId,
+          name: response.data.name
+        }));
+        onLogin();
+        setError('');
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      if (error.response && error.response.data && error.response.data.message) {
+        setError(error.response.data.message);
+      } else if (error.message) {
+        setError(error.message);
+      } else {
+        setError('로그인 중 오류가 발생했습니다.');
+      }
     }
   };
 
-  const handleForgotPassword = () => {
-    setShowForgotPassword(true);
-    setResetEmail('');
-    setResetStatus('');
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    if (!resetEmail) {
+      setResetStatus('이메일을 입력해주세요.');
+      return;
+    }
+
+    try {
+      await axios.post('http://localhost:3001/api/auth/forgot-password', {
+        email: resetEmail
+      });
+      setResetStatus('입력하신 이메일로 비밀번호 재설정 링크가 전송되었습니다.');
+      setTimeout(() => {
+        setShowForgotPassword(false);
+        setResetEmail('');
+        setResetStatus('');
+      }, 3000);
+    } catch (error) {
+      console.error('Forgot password error:', error);
+      if (error.response && error.response.data && error.response.data.message) {
+        setResetStatus(error.response.data.message);
+      } else if (error.message) {
+        setResetStatus(error.message);
+      } else {
+        setResetStatus('비밀번호 재설정 요청 중 오류가 발생했습니다.');
+      }
+    }
   };
 
   const handleResetPassword = (e) => {

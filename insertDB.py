@@ -1,6 +1,8 @@
 import whisper
 import pymysql
 import os
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 from datetime import datetime
 from docx import Document
 from reportlab.lib.pagesizes import letter
@@ -88,9 +90,9 @@ print(f"파일이 저장되었습니다: {file_path}")
 # 14. DB 연결
 conn = pymysql.connect(
     host='49.50.160.162',
-    user='IDCMS',
-    password='IDCMS2023',
-    database='IDCMS',
+    user='dbcvt',
+    password='dbcvt1234',
+    database='dbcvt',
     port=3306,
     charset='utf8mb4',
     autocommit=True

@@ -1,15 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Navigation from './Navigation';
 import '../styles/MainPage.css';
 
 function MainPage({ onNavigate }) {
   const [isRecording, setIsRecording] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
-  const [selectedModel, setSelectedModel] = useState('');
+  const [selectedModel, setSelectedModel] = useState('small');
   const [isLoading, setIsLoading] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [recordingComplete, setRecordingComplete] = useState(false);
   const [showCompletionPopup, setShowCompletionPopup] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
 
   useEffect(() => {
     let interval;
@@ -27,27 +29,44 @@ function MainPage({ onNavigate }) {
     return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
   };
 
-  const handleRecordClick = () => {
-    if (isRecording) {
-      // 녹음 중지 로직
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (err) {
+      console.error('녹음 권한 오류:', err);
+      alert('마이크 접근 권한이 필요합니다.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
       setIsRecording(false);
       setRecordingComplete(true);
-      // 여기에 녹음 파일 다운로드 로직 추가
-      const blob = new Blob(['dummy audio data'], { type: 'audio/wav' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `recording_${new Date().toISOString()}.wav`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
+    }
+  };
+
+  const handleRecordClick = () => {
+    if (isRecording) {
+      stopRecording();
     } else {
-      // 녹음 시작 로직
-      setIsRecording(true);
+      startRecording();
       setRecordingComplete(false);
       setSelectedFile(null);
-      setSelectedModel('');
+      setSelectedModel('small');
     }
   };
 
@@ -66,7 +85,7 @@ function MainPage({ onNavigate }) {
     setSelectedModel(event.target.value);
   };
 
-  const handleConvert = () => {
+  const handleConvert = async () => {
     if (!selectedFile && !recordingComplete) {
       alert('음성 파일을 업로드하거나 녹음을 진행해주세요.');
       return;
@@ -76,15 +95,39 @@ function MainPage({ onNavigate }) {
       return;
     }
     setIsLoading(true);
-    // 여기에 실제 변환 로직 추가
-    setTimeout(() => {
-      setIsLoading(false);
+
+    try {
+      const formData = new FormData();
+      if (selectedFile) {
+        formData.append('audio', selectedFile);
+      } else if (recordingComplete && audioChunksRef.current.length > 0) {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+        formData.append('audio', audioBlob, 'recording.wav');
+      }
+      formData.append('model', selectedModel);
+
+      const response = await fetch('http://localhost:5000/convert', {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error('변환 실패');
+      }
+
+      const result = await response.json();
+      console.log('변환 결과:', result);
       setShowCompletionPopup(true);
       setTimeout(() => {
         setShowCompletionPopup(false);
         onNavigate('records');
       }, 2000);
-    }, 3000);
+    } catch (error) {
+      console.error('변환 중 오류 발생:', error);
+      alert('변환 중 오류가 발생했습니다.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleClosePopup = () => {
@@ -152,10 +195,9 @@ function MainPage({ onNavigate }) {
               onChange={handleModelChange}
               className="model-select"
             >
-              <option value="">변환 모델 선택</option>
-              <option value="model1">model 1</option>
-              <option value="model2">model 2</option>
-              <option value="model3">model 3</option>
+              <option value="small">기본 (Small)</option>
+              <option value="base">저용량 (Base)</option>
+              <option value="large">고용량 (Large)</option>
             </select>
           </div>
 
