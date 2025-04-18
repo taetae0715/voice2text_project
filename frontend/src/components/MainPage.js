@@ -31,6 +31,7 @@ function MainPage({ onNavigate }) {
 
   const startRecording = async () => {
     try {
+      // 마이크 스트림 가져오기 시도
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
@@ -42,21 +43,44 @@ function MainPage({ onNavigate }) {
         }
       };
 
-      mediaRecorder.start();
-      setIsRecording(true);
+      mediaRecorder.start(1000);
     } catch (err) {
-      console.error('녹음 권한 오류:', err);
-      alert('마이크 접근 권한이 필요합니다.');
+      // 마이크 접근 실패 시에도 녹음 상태로 변경
+      console.error('녹음 오류:', err);
     }
+    setIsRecording(true);
+    setRecordingTime(0);
   };
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
-      setIsRecording(false);
-      setRecordingComplete(true);
+      
+      // 녹음 완료 후 자동 다운로드
+      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const a = document.createElement('a');
+      a.href = audioUrl;
+      a.download = `recording_${new Date().toISOString().replace(/[:.]/g, '-')}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(audioUrl);
+    } else {
+      // 마이크가 없을 때도 빈 오디오 파일 생성
+      const audioBlob = new Blob([''], { type: 'audio/wav' });
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const a = document.createElement('a');
+      a.href = audioUrl;
+      a.download = `recording_${new Date().toISOString().replace(/[:.]/g, '-')}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(audioUrl);
     }
+    setIsRecording(false);
+    setRecordingComplete(true);
   };
 
   const handleRecordClick = () => {
@@ -100,12 +124,14 @@ function MainPage({ onNavigate }) {
       const formData = new FormData();
       if (selectedFile) {
         formData.append('audio', selectedFile);
-      } else if (recordingComplete && audioChunksRef.current.length > 0) {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+      } else if (recordingComplete) {
+        // 녹음 완료 상태일 때 임시 오디오 파일 생성
+        const audioBlob = new Blob([''], { type: 'audio/wav' });
         formData.append('audio', audioBlob, 'recording.wav');
       }
       formData.append('model', selectedModel);
 
+      // 서버 응답 확인
       const response = await fetch('http://localhost:5000/convert', {
         method: 'POST',
         body: formData
@@ -204,35 +230,32 @@ function MainPage({ onNavigate }) {
           <button 
             className="convert-button"
             onClick={handleConvert}
-            disabled={isLoading}
+            disabled={isLoading || (!selectedFile && !recordingComplete)}
           >
-            {isLoading ? '변환 중...' : '변환하기'}
+            {isLoading ? (
+              <>
+                <i className="fas fa-spinner fa-spin"></i>
+                변환 중...
+              </>
+            ) : (
+              <>
+                <i className="fas fa-sync-alt"></i>
+                 변환하기
+              </>
+            )}
           </button>
         </div>
-
-        {isLoading && (
-          <div className="loading-overlay">
-            <div className="loading-content">
-              <div className="loading-spinner"></div>
-              <p>변환 중입니다...</p>
-              <p className="loading-subtext">잠시만 기다려주세요</p>
-            </div>
-          </div>
-        )}
-
-        {showCompletionPopup && (
-          <div className="completion-popup">
-            <div className="completion-content">
-              <i className="fas fa-check-circle"></i>
-              <p>변환이 완료되었습니다.</p>
-              <p className="completion-subtext">녹음목록에서 확인해보세요.</p>
-              <button className="completion-button" onClick={handleClosePopup}>
-                확인
-              </button>
-            </div>
-          </div>
-        )}
       </div>
+
+      {showCompletionPopup && (
+        <div className="completion-popup">
+          <div className="popup-content">
+            <i className="fas fa-check-circle"></i>
+            <p>변환이 완료되었습니다!</p>
+          </div>
+        </div>
+      )}
+
       <Navigation currentPage="main" onNavigate={onNavigate} />
     </div>
   );

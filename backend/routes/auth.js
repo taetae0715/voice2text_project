@@ -52,23 +52,25 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ message: '이메일 또는 비밀번호가 올바르지 않습니다.' });
     }
 
+    const user = users[0];
+
     // 비밀번호 확인
-    const isValidPassword = await bcrypt.compare(password, users[0].password);
+    const isValidPassword = await bcrypt.compare(password, user.password);
     if (!isValidPassword) {
       return res.status(401).json({ message: '이메일 또는 비밀번호가 올바르지 않습니다.' });
     }
 
     // JWT 토큰 생성
     const token = jwt.sign(
-      { userId: users[0].id },
+      { userId: user.id },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
 
-    res.json({ 
-      token, 
-      userId: users[0].id, 
-      name: users[0].name 
+    res.json({
+      token,
+      userId: user.id,
+      name: user.name
     });
   } catch (error) {
     console.error(error);

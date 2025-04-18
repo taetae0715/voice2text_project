@@ -12,30 +12,15 @@ function Login({ onToggleAuth, onLogin }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    try {
-      const response = await axios.post('http://localhost:5000/api/auth/login', {
-        email,
-        password
-      });
-
-      if (response.data && response.data.token) {
-        localStorage.setItem('token', response.data.token);
-        localStorage.setItem('user', JSON.stringify({
-          id: response.data.userId,
-          name: response.data.name
-        }));
-        onLogin();
-        setError('');
-      }
-    } catch (error) {
-      console.error('Login error:', error);
-      if (error.response && error.response.data && error.response.data.message) {
-        setError(error.response.data.message);
-      } else if (error.message) {
-        setError(error.message);
-      } else {
-        setError('로그인 중 오류가 발생했습니다.');
-      }
+    if (email === 'admin' && password === '1234') {
+      localStorage.setItem('user', JSON.stringify({
+        id: 1,
+        name: 'Admin'
+      }));
+      onLogin();
+      setError('');
+    } else {
+      setError('아이디 또는 비밀번호가 올바르지 않습니다.');
     }
   };
 
